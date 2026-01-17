@@ -8,6 +8,7 @@
 #define MAX_VMA_NUM 10
 
 char module_path[PATH_MAX];
+char fix_module_path[PATH_MAX];
 static uint64_t module_base = 0;
 unsigned long start_addrs[MAX_VMA_NUM];
 unsigned long end_addrs[MAX_VMA_NUM];
@@ -62,7 +63,12 @@ bool init_vma(){
 
 
 __attribute__((noinline)) void test_kernel_trace(){
-    LOGD("test_kernel_trace fun calling");
+    int a=0,b=0;
+    a = b+8;
+    b = a+5;
+    char test[200];
+    snprintf(test,200,"%d %d",a,b);
+    LOGD("test_kernel_trace fun calling,%s",test);
 }
 
 void test(){
@@ -79,12 +85,22 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
     }
     LOGD("success parse maps files");
 
-    //为KernelTrace提供必要的初始信息
-    set_target_uid(getuid());
-    set_module_base(module_base);
-    set_target_file(module_path);
+    strcpy(fix_module_path,module_path);//这里设置为原模块路径就是跟没设置一样，只是用于演示api的使用
 
-    LOGD("module_base:%llx,module_path:%s",module_base,module_path);
+    //为KernelTrace提供必要的初始信息
+    trace_init_info *base_info = (trace_init_info*)malloc(sizeof(trace_init_info));
+    base_info->module_base = module_base;
+    base_info->uid = getuid();
+
+    base_info->tfile_name = (char *)malloc(strlen(module_path) + 1);
+    strcpy(base_info->tfile_name,module_path);
+
+    base_info->fix_file_name = (char *)malloc(strlen(fix_module_path) + 1);
+    strcpy(base_info->fix_file_name,fix_module_path);
+
+    int sret = trace_init(base_info);
+
+    LOGD("module_base:%llx,module_path:%s,fix_module_path:%s,sret:%d",module_base,module_path,fix_module_path,sret);
 
     //hook前进行的一些准备
     unsigned long test_fun_addr = (unsigned long)test_kernel_trace;
@@ -96,14 +112,12 @@ JNIEXPORT jint JNICALL JNI_OnLoad(JavaVM *vm, void *reserved) {
         }
     }
 
-    char oins[4];
-    memcpy(oins,(void *)test_kernel_trace,4);//获取被hook函数的第一条汇编指令
-    LOGD("test_fun_offset:%lx,uprobe_offset:%lx",test_fun_offset,uprobe_offset);
-    //如果so的相应汇编指令不是在so加载后才动态解密可直接设置fix_insn参数为NULL
-    //set_fun_info(uprobe_offset,test_fun_offset,"test_kernel_trace",NULL);
-
-    //不过最好还是直接读取汇编指令并传入
-    set_fun_info(uprobe_offset,test_fun_offset,"test_kernel_trace",oins);//发送hook请求
+    uprobe_item_info *uprobe_item = (uprobe_item_info*)malloc(sizeof(uprobe_item_info));
+    uprobe_item->uprobe_offset = uprobe_offset;
+    uprobe_item->fun_offset = test_fun_offset;
+    uprobe_item->fun_name = (char *)malloc(strlen("test_kernel_trace") + 1);
+    strcpy(uprobe_item->fun_name,"test_kernel_trace");
+    set_fun_info(uprobe_item);//发送hook请求
 
     //启动测试线程开始测试
     std::thread test_thread(test);
